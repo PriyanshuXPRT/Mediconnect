@@ -1,0 +1,115 @@
+{% extends 'base.html' %}
+{% block title %}Doctor Dashboard · UnityCare{% endblock %}
+{% block content %}
+<div class="container py-5">
+  <div class="row">
+    <div class="col-12">
+      <h2 class="mb-3">Welcome, Doctor {{ request.user.first_name|default:request.user.username }}</h2>
+      <p class="text-muted">Here is your overview.</p>
+    </div>
+    <div class="col-md-4">
+      <div class="card card-shadow mb-4">
+        <div class="card-body">
+          <h5 class="card-title">Appointments</h5>
+          <p class="card-text text-muted">Upcoming schedule and requests.</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card card-shadow mb-4">
+        <div class="card-body">
+          <h5 class="card-title">Patients</h5>
+          <p class="card-text text-muted">Quick access to patient profiles.</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card card-shadow mb-4">
+        <div class="card-body">
+          <h5 class="card-title">Tasks</h5>
+          <p class="card-text text-muted">Your tasks and reminders.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="row mt-3">
+    <div class="col-md-6">
+      <div class="card card-shadow">
+        <div class="card-body">
+          <h5 class="card-title">Live Video & Chat</h5>
+          <p class="text-muted">Start or join a teleconferencing room. Share the same room code with your patient.</p>
+          <div class="d-flex gap-2">
+            <input id="doctor-room-input" type="text" class="form-control" placeholder="Enter room code (e.g., appointment-123)" />
+            <button id="doctor-join-btn" class="btn btn-primary">Join</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  (function() {
+    // Telecon join controls
+    const input = document.getElementById('doctor-room-input');
+    const btn = document.getElementById('doctor-join-btn');
+    if (btn) {
+      btn.addEventListener('click', function() {
+        const room = (input.value || 'general').trim();
+        if (!room) return;
+        window.location.href = `/telecon/room/${encodeURIComponent(room)}/`;
+      });
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') btn.click();
+      });
+    }
+
+    // Doctor: show appointments assigned to them
+    async function fetchDoctorAppointments() {
+      const containerId = 'doctor-appts-list';
+      let listEl = document.getElementById(containerId);
+      if (!listEl) {
+        // inject a simple list under the first card if not present
+        const cards = document.getElementsByClassName('card-body');
+        if (cards && cards[0]) {
+          const ul = document.createElement('ul');
+          ul.id = containerId;
+          ul.className = 'list-group small mt-3';
+          cards[0].appendChild(ul);
+        }
+        listEl = document.getElementById(containerId);
+      }
+      if (!listEl) return;
+      listEl.innerHTML = '<li class="list-group-item">Loading...</li>';
+      try {
+        const resp = await fetch('/api/appointments/');
+        if (!resp.ok) throw new Error('Failed to load');
+        const data = await resp.json();
+        if (!Array.isArray(data) || data.length === 0) {
+          listEl.innerHTML = '<li class="list-group-item text-muted">No appointments yet.</li>';
+          return;
+        }
+        listEl.innerHTML = '';
+        data.forEach(item => {
+          const li = document.createElement('li');
+          li.className = 'list-group-item d-flex justify-content-between align-items-start';
+          const dt = new Date(item.scheduled_for);
+          li.innerHTML = `
+            <div>
+              <div><strong>${dt.toLocaleString()}</strong></div>
+              <div class="text-muted">Patient: ${item.patient_name || item.patient}</div>
+              ${item.reason ? `<div class="text-muted">Reason: ${item.reason}</div>` : ''}
+            </div>
+            <span class="badge bg-secondary">${item.status}</span>
+          `;
+          listEl.appendChild(li);
+        });
+      } catch (e) {
+        listEl.innerHTML = '<li class="list-group-item text-danger">Failed to load appointments.</li>';
+      }
+    }
+
+    // Load on page load
+    fetchDoctorAppointments();
+  })();
+</script>
+{% endblock %}

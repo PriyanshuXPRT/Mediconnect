@@ -1,0 +1,202 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block content %}
+<h2>Telecon Room: {{ room_name }}</h2>
+<p>Your role: <strong>{{ role }}</strong></p>
+
+<div style="display:flex; gap:16px; flex-wrap: wrap;">
+  <div>
+    <h3>Local Video</h3>
+    <video id="localVideo" autoplay playsinline muted style="width:320px; background:#000;"></video>
+  </div>
+  <div>
+    <h3>Remote Video</h3>
+    <video id="remoteVideo" autoplay playsinline style="width:320px; background:#000;"></video>
+  </div>
+</div>
+
+<div style="margin-top:16px;">
+  <h3>Chat</h3>
+  <div id="chat" style="border:1px solid #ccc; height:200px; overflow:auto; padding:8px;"></div>
+  <div style="margin-top:8px; display:flex; gap:8px;">
+    <input id="chatInput" type="text" placeholder="Type a message..." style="flex:1;" />
+    <button id="sendBtn">Send</button>
+  </div>
+</div>
+
+
+{{ room_name|json_script:"room-name" }}
+{{ role|json_script:"user-role" }}
+
+<script>
+(async function() {
+  const roomName = JSON.parse(document.getElementById('room-name').textContent);
+  const role = JSON.parse(document.getElementById('user-role').textContent);
+  const clientId = Math.random().toString(36).slice(2);
+
+  const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const wsUrl = `${wsScheme}://${window.location.host}/ws/telecon/${encodeURIComponent(roomName)}/?role=${encodeURIComponent(role)}`;
+  const socket = new WebSocket(wsUrl);
+  socket.onerror = (e) => addChat('[error] WebSocket error');
+
+  const chatEl = document.getElementById('chat');
+  const chatInput = document.getElementById('chatInput');
+  const sendBtn = document.getElementById('sendBtn');
+
+  function addChat(line) {
+    const p = document.createElement('div');
+    p.textContent = line;
+    chatEl.appendChild(p);
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  // WebRTC setup
+  const localVideo = document.getElementById('localVideo');
+  const remoteVideo = document.getElementById('remoteVideo');
+
+  const pc = new RTCPeerConnection({
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+    ]
+  });
+
+  // Perfect Negotiation: trigger offer when needed
+  pc.onnegotiationneeded = async () => {
+    try {
+      await makeOffer();
+    } catch (err) {
+      console.error(err);
+      addChat('[error] ' + err.message);
+    }
+  };
+
+  pc.onicecandidate = (event) => {
+    if (event.candidate) {
+      socket.send(JSON.stringify({ type: 'candidate', candidate: event.candidate, from: clientId }));
+    }
+  };
+
+  pc.ontrack = (event) => {
+    // Attach first remote stream
+    if (remoteVideo.srcObject !== event.streams[0]) {
+      remoteVideo.srcObject = event.streams[0];
+    }
+  };
+
+  // Also set remote stream from onaddstream (older implementations)
+  pc.onaddstream = (event) => {
+    if (!remoteVideo.srcObject) {
+      remoteVideo.srcObject = event.stream;
+    }
+  };
+
+  // Capture local stream
+  const localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+  // Show our local preview
+  localVideo.srcObject = localStream;
+  // Add tracks to the peer connection
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+  let isPolite = role === 'patient';
+  let makingOffer = false;
+  let ignoreOffer = false;
+
+  async function makeOffer() {
+    try {
+      makingOffer = true;
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription, from: clientId }));
+    } finally {
+      makingOffer = false;
+    }
+  }
+
+  socket.onopen = async () => {
+    addChat('[system] connected');
+    // Initiator: doctor proposes first
+    if (role === 'doctor') {
+      await makeOffer();
+    }
+  };
+
+  socket.onmessage = async (event) => {
+    const data = JSON.parse(event.data);
+    // Ignore our own echoed messages
+    if (data.from && data.from === clientId) return;
+
+    if (data.type === 'chat') {
+      addChat(data.message);
+      return;
+    }
+
+    // Log unexpected messages for debugging
+    if (!data.type) {
+      addChat('[error] Unknown message format');
+      return;
+    }
+
+    if (data.type === 'presence') {
+      addChat(`[presence] ${data.role} ${data.status}`);
+      // If the other party just joined and we are the doctor, (re)send an offer
+      if (data.status === 'joined' && data.role !== role) {
+        // If we are the doctor, proactively (re)offer. If patient, rely on polite negotiation.
+        if (role === 'doctor') await makeOffer();
+      }
+      return;
+    }
+
+    try {
+      if (data.type === 'offer') {
+        const offerCollision = (makingOffer || pc.signalingState !== 'stable');
+        ignoreOffer = !isPolite && offerCollision;
+        if (ignoreOffer) return;
+
+        await pc.setRemoteDescription(data.sdp);
+        await pc.setLocalDescription(await pc.createAnswer());
+        socket.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription, from: clientId }));
+        return;
+      }
+
+      if (data.type === 'answer') {
+        await pc.setRemoteDescription(data.sdp);
+        return;
+      }
+
+      if (data.type === 'candidate') {
+        try {
+          // Ignore early candidates if no remote description yet
+          if (pc.remoteDescription) {
+            await pc.addIceCandidate(data.candidate);
+          }
+        } catch (err) {
+          if (!ignoreOffer) throw err;
+        }
+        return;
+      }
+    } catch (err) {
+      console.error(err);
+      addChat('[error] ' + err.message);
+    }
+  };
+
+  socket.onclose = (e) => {
+    addChat(`[system] disconnected (code=${e.code}, reason=${e.reason || 'n/a'})`);
+  };
+
+  sendBtn.addEventListener('click', () => {
+    const msg = chatInput.value.trim();
+    if (!msg) return;
+    if (socket.readyState !== WebSocket.OPEN) {
+      addChat('[error] Chat not sent: socket not open');
+      return;
+    }
+    socket.send(JSON.stringify({ type: 'chat', message: `${role}: ${msg}`, from: clientId }));
+    chatInput.value = '';
+  });
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendBtn.click();
+  });
+})();
+</script>
+{% endblock %}

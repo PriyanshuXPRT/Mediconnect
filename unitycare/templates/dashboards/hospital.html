@@ -1,0 +1,36 @@
+{% extends 'base.html' %}
+{% block title %}Hospital Dashboard · UnityCare{% endblock %}
+{% block content %}
+<div class="container py-5">
+  <div class="row">
+    <div class="col-12">
+      <h2 class="mb-3">Welcome, {{ request.user.first_name|default:request.user.username }}</h2>
+      <p class="text-muted">Operational overview for your hospital.</p>
+    </div>
+    <div class="col-md-4">
+      <div class="card card-shadow mb-4">
+        <div class="card-body">
+          <h5 class="card-title">Bed Capacity</h5>
+          <p class="card-text text-muted">Monitor current occupancy.</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card card-shadow mb-4">
+        <div class="card-body">
+          <h5 class="card-title">Departments</h5>
+          <p class="card-text text-muted">Coordinate across units.</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card card-shadow mb-4">
+        <div class="card-body">
+          <h5 class="card-title">Staff</h5>
+          <p class="card-text text-muted">Manage staff and schedules.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
